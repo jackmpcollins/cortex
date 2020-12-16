@@ -57,8 +57,8 @@ func apiValidation(
 	awsClusterConfig *clusterconfig.Config, // should be omitted if running locally
 	gcpClusterConfig *clusterconfig.GCPConfig, // should be omitted if running locally
 ) *cr.StructValidation {
+	var structFieldValidations []*cr.StructFieldValidation
 
-	structFieldValidations := []*cr.StructFieldValidation{}
 	switch resource.Kind {
 	case userconfig.RealtimeAPIKind:
 		structFieldValidations = append(resourceStructValidations,
@@ -73,6 +73,12 @@ func apiValidation(
 		structFieldValidations = append(resourceStructValidations,
 			predictorValidation(),
 			networkingValidation(resource.Kind, provider, awsClusterConfig, gcpClusterConfig),
+			computeValidation(provider),
+		)
+	case userconfig.TaskAPIKind:
+		structFieldValidations = append(resourceStructValidations,
+			taskDefinitionValidation(),
+			networkingValidation(resource.Kind, awsClusterConfig, gcpClusterConfig),
 			computeValidation(provider),
 		)
 	case userconfig.TrafficSplitterKind:
@@ -229,6 +235,63 @@ func predictorValidation() *cr.StructFieldValidation {
 	}
 }
 
+func taskDefinitionValidation() *cr.StructFieldValidation {
+	return &cr.StructFieldValidation{
+		StructField: "TaskDefinition",
+		StructValidation: &cr.StructValidation{
+			Required: true,
+			StructFieldValidations: []*cr.StructFieldValidation{
+				{
+					StructField: "Path",
+					StringValidation: &cr.StringValidation{
+						Required: true,
+					},
+				},
+				{
+					StructField: "PythonPath",
+					StringPtrValidation: &cr.StringPtrValidation{
+						AllowEmpty:       false,
+						DisallowedValues: []string{".", "./", "./."},
+						Validator: func(path string) (string, error) {
+							if files.IsAbsOrTildePrefixed(path) {
+								return "", ErrorMustBeRelativeProjectPath(path)
+							}
+							path = strings.TrimPrefix(path, "./")
+							path = s.EnsureSuffix(path, "/")
+							return path, nil
+						},
+					},
+				},
+				{
+					StructField: "Image",
+					StringValidation: &cr.StringValidation{
+						Required:           false,
+						AllowEmpty:         true,
+						DockerImageOrEmpty: true,
+					},
+				},
+				{
+					StructField: "Config",
+					InterfaceMapValidation: &cr.InterfaceMapValidation{
+						StringKeysOnly:     true,
+						AllowEmpty:         true,
+						AllowExplicitNull:  true,
+						ConvertNullToEmpty: true,
+						Default:            map[string]interface{}{},
+					},
+				},
+				{
+					StructField: "Env",
+					StringMapValidation: &cr.StringMapValidation{
+						Default:    map[string]string{},
+						AllowEmpty: true,
+					},
+				},
+			},
+		},
+	}
+}
+
 func monitoringValidation(provider types.ProviderType) *cr.StructFieldValidation {
 	if provider != types.AWSProviderType && provider != types.LocalProviderType {
 		return &cr.StructFieldValidation{
@@ -238,7 +301,6 @@ func monitoringValidation(provider types.ProviderType) *cr.StructFieldValidation
 			},
 		}
 	}
-
 	return &cr.StructFieldValidation{
 		StructField: "Monitoring",
 		StructValidation: &cr.StructValidation{
@@ -775,7 +837,9 @@ func ExtractAPIConfigs(
 
 		api.SubmittedAPISpec = interfaceMap
 
-		if resourceStruct.Kind == userconfig.RealtimeAPIKind || resourceStruct.Kind == userconfig.BatchAPIKind {
+		if resourceStruct.Kind == userconfig.RealtimeAPIKind ||
+			resourceStruct.Kind == userconfig.BatchAPIKind ||
+			resourceStruct.Kind == userconfig.TaskAPIKind {
 			api.ApplyDefaultDockerPaths()
 		}
 
@@ -804,12 +868,15 @@ func ValidateAPI(
 		api.Networking.Endpoint = pointer.String("/" + api.Name)
 	}
 
-	if err := validatePredictor(api, models, projectFiles, provider, awsClient, gcpClient, k8sClient); err != nil {
-		return errors.Wrap(err, userconfig.PredictorKey)
-	}
-
-	if err := validateTaskDefinition(api, projectFiles, provider, awsClient, k8sClient); err != nil {
-		return errors.Wrap(err, userconfig.TaskDefinitionKey)
+	switch api.Kind {
+	case userconfig.TaskAPIKind:
+		if err := validateTaskDefinition(api, projectFiles, provider, awsClient, k8sClient); err != nil {
+			return errors.Wrap(err, userconfig.TaskDefinitionKey)
+		}
+	default:
+		if err := validatePredictor(api, models, projectFiles, provider, awsClient, gcpClient, k8sClient); err != nil {
+			return errors.Wrap(err, userconfig.PredictorKey)
+		}
 	}
 
 	if api.Autoscaling != nil { // should only be nil for local provider
