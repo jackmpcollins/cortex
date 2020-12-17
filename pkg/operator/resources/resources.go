@@ -311,6 +311,9 @@ func DeleteAPI(apiName string, keepCache bool) (*schema.DeleteResponse, error) {
 					}
 					return nil
 				},
+				func() error {
+					return taskapi.DeleteAPI(apiName, keepCache)
+				},
 			)
 			if err != nil {
 				telemetry.Error(err)
