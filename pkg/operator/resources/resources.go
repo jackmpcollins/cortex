@@ -467,6 +467,11 @@ func GetAPI(apiName string) ([]schema.APIResponse, error) {
 		if err != nil {
 			return nil, err
 		}
+	case userconfig.TaskAPIKind:
+		apiResponse, err = taskapi.GetAPIByName(deployedResource)
+		if err != nil {
+			return nil, err
+		}
 	case userconfig.TrafficSplitterKind:
 		apiResponse, err = trafficsplitter.GetAPIByName(deployedResource)
 		if err != nil {
