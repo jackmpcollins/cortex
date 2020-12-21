@@ -14,20 +14,31 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package status
+package job
 
 import (
-	"time"
+	"fmt"
 
-	"github.com/cortexlabs/cortex/pkg/types/metrics"
+	"github.com/cortexlabs/cortex/pkg/lib/errors"
 	"github.com/cortexlabs/cortex/pkg/types/spec"
+	"github.com/cortexlabs/cortex/pkg/types/userconfig"
 )
 
-type JobStatus struct {
-	spec.BatchJob
-	EndTime        *time.Time            `json:"end_time"`
-	Status         JobCode               `json:"status"`
-	BatchesInQueue int                   `json:"batches_in_queue"`
-	BatchMetrics   *metrics.BatchMetrics `json:"batch_metrics"`
-	WorkerCounts   *WorkerCounts         `json:"worker_counts"`
+const (
+	ErrInvalidJobKind = "job.invalid_kind"
+	ErrJobNotFound    = "job.not_found"
+)
+
+func ErrorInvalidJobKind(kind userconfig.Kind) error {
+	return errors.WithStack(&errors.Error{
+		Kind:    ErrInvalidJobKind,
+		Message: fmt.Sprintf("invalid job kind %s", kind.String()),
+	})
+}
+
+func ErrorJobNotFound(jobKey spec.JobKey) error {
+	return errors.WithStack(&errors.Error{
+		Kind:    ErrJobNotFound,
+		Message: fmt.Sprintf("unable to find job %s", jobKey.UserString()),
+	})
 }

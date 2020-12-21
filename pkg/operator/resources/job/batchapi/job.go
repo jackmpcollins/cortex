@@ -24,13 +24,14 @@ import (
 	"github.com/cortexlabs/cortex/pkg/lib/telemetry"
 	"github.com/cortexlabs/cortex/pkg/operator/config"
 	"github.com/cortexlabs/cortex/pkg/operator/operator"
+	"github.com/cortexlabs/cortex/pkg/operator/resources/job"
 	"github.com/cortexlabs/cortex/pkg/operator/schema"
 	"github.com/cortexlabs/cortex/pkg/types/spec"
 	kmeta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	klabels "k8s.io/apimachinery/pkg/labels"
 )
 
-func DryRun(submission *schema.JobSubmission) ([]string, error) {
+func DryRun(submission *schema.BatchJobSubmission) ([]string, error) {
 	err := validateJobSubmission(submission)
 	if err != nil {
 		return nil, err
@@ -57,7 +58,7 @@ func DryRun(submission *schema.JobSubmission) ([]string, error) {
 	return nil, nil
 }
 
-func SubmitJob(apiName string, submission *schema.JobSubmission) (*spec.Job, error) {
+func SubmitJob(apiName string, submission *schema.BatchJobSubmission) (*spec.BatchJob, error) {
 	err := validateJobSubmission(submission)
 	if err != nil {
 		return nil, err
@@ -80,6 +81,7 @@ func SubmitJob(apiName string, submission *schema.JobSubmission) (*spec.Job, err
 	jobKey := spec.JobKey{
 		APIName: apiSpec.Name,
 		ID:      jobID,
+		Kind:    apiSpec.Kind,
 	}
 
 	tags := map[string]string{
@@ -93,7 +95,7 @@ func SubmitJob(apiName string, submission *schema.JobSubmission) (*spec.Job, err
 		return nil, err
 	}
 
-	jobSpec := spec.Job{
+	jobSpec := spec.BatchJob{
 		RuntimeJobConfig: submission.RuntimeJobConfig,
 		JobKey:           jobKey,
 		APIID:            apiSpec.ID,
@@ -115,7 +117,7 @@ func SubmitJob(apiName string, submission *schema.JobSubmission) (*spec.Job, err
 		return nil, err
 	}
 
-	err = setEnqueuingStatus(jobKey)
+	err = job.SetEnqueuingStatus(jobKey)
 	if err != nil {
 		deleteQueueByURL(queueURL)
 		return nil, err
@@ -132,8 +134,8 @@ func SubmitJob(apiName string, submission *schema.JobSubmission) (*spec.Job, err
 	return &jobSpec, nil
 }
 
-func downloadJobSpec(jobKey spec.JobKey) (*spec.Job, error) {
-	jobSpec := spec.Job{}
+func downloadJobSpec(jobKey spec.JobKey) (*spec.BatchJob, error) {
+	jobSpec := spec.BatchJob{}
 	err := config.AWS.ReadJSONFromS3(&jobSpec, config.Cluster.Bucket, jobKey.SpecFilePath(config.Cluster.ClusterName))
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to download job specification", jobKey.UserString())
@@ -141,7 +143,7 @@ func downloadJobSpec(jobKey spec.JobKey) (*spec.Job, error) {
 	return &jobSpec, nil
 }
 
-func uploadJobSpec(jobSpec *spec.Job) error {
+func uploadJobSpec(jobSpec *spec.BatchJob) error {
 	err := config.AWS.UploadJSONToS3(jobSpec, config.Cluster.Bucket, jobSpec.SpecFilePath(config.Cluster.ClusterName))
 	if err != nil {
 		return err
@@ -149,12 +151,12 @@ func uploadJobSpec(jobSpec *spec.Job) error {
 	return nil
 }
 
-func deployJob(apiSpec *spec.API, jobSpec *spec.Job, submission *schema.JobSubmission) {
+func deployJob(apiSpec *spec.API, jobSpec *spec.BatchJob, submission *schema.BatchJobSubmission) {
 	totalBatches, err := enqueue(jobSpec, submission)
 	if err != nil {
 		err := errors.FirstError(
 			writeToJobLogStream(jobSpec.JobKey, errors.Wrap(err, "failed to enqueue all batches").Error()),
-			setEnqueueFailedStatus(jobSpec.JobKey),
+			job.SetEnqueueFailedStatus(jobSpec.JobKey),
 			deleteJobRuntimeResources(jobSpec.JobKey),
 		)
 		if err != nil {
@@ -170,7 +172,7 @@ func deployJob(apiSpec *spec.API, jobSpec *spec.Job, submission *schema.JobSubmi
 		if submission.DelimitedFiles != nil {
 			errs = append(errs, writeToJobLogStream(jobSpec.JobKey, "please verify that the files are not empty (the files being read can be retrieved by providing `dryRun=true` query param with your job submission"))
 		}
-		errs = append(errs, setEnqueueFailedStatus(jobSpec.JobKey))
+		errs = append(errs, job.SetEnqueueFailedStatus(jobSpec.JobKey))
 		errs = append(errs, deleteJobRuntimeResources(jobSpec.JobKey))
 
 		err := errors.FirstError(errs...)
@@ -196,7 +198,7 @@ func deployJob(apiSpec *spec.API, jobSpec *spec.Job, submission *schema.JobSubmi
 		handleJobSubmissionError(jobSpec.JobKey, err)
 	}
 
-	err = setRunningStatus(jobSpec.JobKey)
+	err = job.SetRunningStatus(jobSpec.JobKey)
 	if err != nil {
 		handleJobSubmissionError(jobSpec.JobKey, err)
 		return
@@ -206,7 +208,7 @@ func deployJob(apiSpec *spec.API, jobSpec *spec.Job, submission *schema.JobSubmi
 func handleJobSubmissionError(jobKey spec.JobKey, jobErr error) {
 	err := errors.FirstError(
 		writeToJobLogStream(jobKey, jobErr.Error()),
-		setUnexpectedErrorStatus(jobKey),
+		job.SetUnexpectedErrorStatus(jobKey),
 		deleteJobRuntimeResources(jobKey),
 	)
 	if err != nil {
@@ -215,13 +217,13 @@ func handleJobSubmissionError(jobKey spec.JobKey, jobErr error) {
 	}
 }
 
-func createK8sJob(apiSpec *spec.API, jobSpec *spec.Job) error {
-	job, err := k8sJobSpec(apiSpec, jobSpec)
+func createK8sJob(apiSpec *spec.API, jobSpec *spec.BatchJob) error {
+	kJob, err := k8sJobSpec(apiSpec, jobSpec)
 	if err != nil {
 		return err
 	}
 
-	_, err = config.K8s.CreateJob(job)
+	_, err = config.K8s.CreateJob(kJob)
 	if err != nil {
 		return err
 	}
@@ -254,7 +256,7 @@ func deleteJobRuntimeResources(jobKey spec.JobKey) error {
 }
 
 func StopJob(jobKey spec.JobKey) error {
-	jobState, err := getJobState(jobKey)
+	jobState, err := job.GetJobState(jobKey)
 	if err != nil {
 		go deleteJobRuntimeResources(jobKey)
 		return err
@@ -268,6 +270,6 @@ func StopJob(jobKey spec.JobKey) error {
 	writeToJobLogStream(jobKey, "request received to stop job; performing cleanup...")
 	return errors.FirstError(
 		deleteJobRuntimeResources(jobKey),
-		setStoppedStatus(jobKey),
+		job.SetStoppedStatus(jobKey),
 	)
 }
