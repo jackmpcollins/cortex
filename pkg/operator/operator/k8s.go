@@ -36,7 +36,6 @@ import (
 	istioclientnetworking "istio.io/client-go/pkg/apis/networking/v1beta1"
 	kcore "k8s.io/api/core/v1"
 	kresource "k8s.io/apimachinery/pkg/api/resource"
-	kmeta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	intstr "k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -188,9 +187,9 @@ func TaskContainers(api *spec.API) ([]kcore.Container, []kcore.Volume) {
 		Env:             getTaskEnvVars(api, APIContainerName),
 		EnvFrom:         baseEnvVars(),
 		VolumeMounts:    apiPodVolumeMounts,
-		ReadinessProbe:  FileExistsProbe(_apiReadinessFile),
-		LivenessProbe:   _apiLivenessProbe,
-		Lifecycle:       nginxGracefulStopper(api.Kind),
+		//ReadinessProbe:  FileExistsProbe(_apiReadinessFile), // TODO: check if it makes sense to have probes
+		//LivenessProbe:   _apiLivenessProbe,
+		Lifecycle: nginxGracefulStopper(api.Kind),
 		Resources: kcore.ResourceRequirements{
 			Requests: apiPodResourceList,
 			Limits:   apiPodResourceLimitsList,
@@ -654,6 +653,10 @@ func getTaskEnvVars(api *spec.API, container string) []kcore.EnvVar {
 				Value: path.Join(_emptyDirMountPath, "project"),
 			},
 			kcore.EnvVar{
+				Name:  "CORTEX_CACHE_DIR",
+				Value: _specCacheDir,
+			},
+			kcore.EnvVar{
 				Name:  "CORTEX_API_SPEC",
 				Value: config.BucketPath(api.Key),
 			},
@@ -1082,14 +1085,4 @@ func GetEndpointFromVirtualService(virtualService *istioclientnetworking.Virtual
 	}
 
 	return endpoints.GetOne(), nil
-}
-
-func extractCortexAnnotations(obj kmeta.Object) map[string]string {
-	cortexAnnotations := make(map[string]string)
-	for key, value := range obj.GetAnnotations() {
-		if strings.Contains(key, "cortex.dev/") {
-			cortexAnnotations[key] = value
-		}
-	}
-	return cortexAnnotations
 }
