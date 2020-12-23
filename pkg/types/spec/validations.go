@@ -78,7 +78,7 @@ func apiValidation(
 	case userconfig.TaskAPIKind:
 		structFieldValidations = append(resourceStructValidations,
 			taskDefinitionValidation(),
-			networkingValidation(resource.Kind, awsClusterConfig, gcpClusterConfig),
+			networkingValidation(resource.Kind, provider, awsClusterConfig, gcpClusterConfig),
 			computeValidation(provider),
 		)
 	case userconfig.TrafficSplitterKind:
