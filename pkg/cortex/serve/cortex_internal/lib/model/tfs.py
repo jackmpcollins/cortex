@@ -113,7 +113,8 @@ class TensorFlowServingAPI:
             {}
         )  # maps the model ID to the model metadata (signature def, signature key and so on)
 
-        self.channel = grpc.insecure_channel(self.address)
+        options = [('grpc.max_message_length', 128 * 1024 * 1024)]
+        self.channel = grpc.insecure_channel(self.address, options=options)
         self._service = model_service_pb2_grpc.ModelServiceStub(self.channel)
         self._pred = prediction_service_pb2_grpc.PredictionServiceStub(self.channel)
 
